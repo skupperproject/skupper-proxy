@@ -1,0 +1,18 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: http-simple
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      application: http-simple
+  template:
+    metadata:
+      labels:
+        application: http-simple
+    spec:
+      containers:
+      - name: simple
+        image: quay.io/gordons/simple-http
+        imagePullPolicy: IfNotPresent

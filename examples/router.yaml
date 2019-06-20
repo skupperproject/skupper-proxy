@@ -1,0 +1,166 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: myrouter
+  labels:
+    application: myrouter
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      application: myrouter
+  template:
+    metadata:
+      labels:
+        application: myrouter
+    spec:
+      serviceAccountName: myrouter
+      containers:
+      - env:
+        - name: APPLICATION_NAME
+          value: myrouter
+        - name: QDROUTERD_CONF
+          value: /etc/qpid-dispatch/qdrouterd.conf
+        - name: QDROUTERD_AUTO_MESH_DISCOVERY
+          value: QUERY
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
+        image: quay.io/interconnectedcloud/qdrouterd:latest
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+        name: qdrouterd
+        ports:
+        - containerPort: 5672
+          name: amqp
+          protocol: TCP
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 55672
+          name: inter-router
+          protocol: TCP
+        volumeMounts:
+        - mountPath: /etc/qpid-dispatch/
+          name: myrouter
+      volumes:
+      - configMap:
+          name: myrouter
+        name: myrouter
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: myrouter
+  labels:
+    application: myrouter
+data:
+  qdrouterd.conf: |2+
+
+    router {
+        mode: interior
+        id: Router.${HOSTNAME}
+    }
+
+    listener {
+        host: 0.0.0.0
+        port: 5672
+        role: normal
+    }
+
+    listener {
+        host: 0.0.0.0
+        port: 8080
+        role: normal
+        http: true
+    }
+
+    listener {
+        role: inter-router
+        host: 0.0.0.0
+        port: 55672
+    }
+
+    address {
+        prefix: balanced
+        distribution: balanced
+    }
+
+    address {
+        prefix: closest
+        distribution: closest
+    }
+
+    address {
+        prefix: multicast
+        distribution: multicast
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    application: myrouter
+  name: myrouter
+spec:
+  ports:
+  - name: amqp
+    port: 5672
+    targetPort: 5672
+  - name: http
+    port: 8080
+    targetPort: 8080
+  - name: inter-router
+    port: 55672
+    targetPort: 55672
+  selector:
+    application: myrouter
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: myrouter
+  labels:
+    application: myrouter
+---
+apiVersion: v1
+kind: RoleBinding
+metadata:
+  labels:
+    application: myrouter
+  name: myrouter-view
+subjects:
+- kind: ServiceAccount
+  name: myrouter
+roleRef:
+  kind: Role
+  name: view
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: myrouter
+  labels:
+    application: myrouter
+type: Opaque
+stringData:
+  connect.json: |-
+    {
+        "scheme": "amqp",
+        "host": "myrouter"
+    }
+---
+

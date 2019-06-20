@@ -1,0 +1,18 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: tcp-echo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      application: tcp-echo
+  template:
+    metadata:
+      labels:
+        application: tcp-echo
+    spec:
+      containers:
+      - name: echo
+        image: quay.io/gordons/tcp-echo
+        imagePullPolicy: IfNotPresent

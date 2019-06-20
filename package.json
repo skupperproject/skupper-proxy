@@ -1,0 +1,14 @@
+{
+    "name": "icproxy",
+    "version": "0.0.1",
+    "description": "Prototype service proxy",
+    "license": "Apache-2.0",
+    "repository": {
+        "type": "git",
+        "url": "http://github.com/grs/icproxy"
+    },
+    "dependencies": {
+        "debug": "*",
+        "rhea": "*"
+    }
+}
