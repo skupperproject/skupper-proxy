@@ -1,4 +1,4 @@
-== icproxy: a tcp/http proxy prototype using apache qpid dispatch router ==
+## icproxy: a tcp/http proxy prototype using apache qpid dispatch router
 
 The proxy is controlled via two environment variables:
 
@@ -15,7 +15,7 @@ by a colon.
 E.g. tcp:9090=>amqp:foo implies listening on 9090 for tcp data which
 is then sent over a link to foo
 
-== examples ==
+### examples
 
 Under examples there are a couple of dummy services for trying things out.
 
