@@ -1,0 +1,31 @@
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: tcp-echo
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      application: tcp-echo
+  template:
+    metadata:
+      labels:
+        application: tcp-echo
+    spec:
+      containers:
+      - name: echo
+        image: quay.io/gordons/tcp-echo
+        imagePullPolicy: IfNotPresent
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo
+spec:
+  ports:
+  - port: 9090
+    targetPort: 9090
+  selector:
+    application: tcp-echo
+---

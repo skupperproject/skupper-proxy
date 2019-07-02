@@ -1,0 +1,63 @@
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: icproxy-deployer
+  labels:
+    application: icproxy-deployer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      application: icproxy-deployer
+  template:
+    metadata:
+      labels:
+        application: icproxy-deployer
+    spec:
+      serviceAccountName: icproxy-deployer
+      containers:
+      - name: deployer
+        image: quay.io/gordons/icproxy-deployer
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: icproxy
+  labels:
+    application: icproxy-deployer
+---
+apiVersion: v1
+kind: RoleBinding
+metadata:
+  labels:
+    application: icproxy-deployer
+  name: icproxy-view
+subjects:
+- kind: ServiceAccount
+  name: icproxy
+roleRef:
+  kind: Role
+  name: view
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: icproxy-deployer
+  labels:
+    application: icproxy-deployer
+---
+apiVersion: v1
+kind: RoleBinding
+metadata:
+  labels:
+    application: icproxy-deployer
+  name: icproxy-edit
+subjects:
+- kind: ServiceAccount
+  name: icproxy-deployer
+roleRef:
+  kind: Role
+  name: edit
+---
+
