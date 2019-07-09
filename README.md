@@ -35,6 +35,13 @@ and/or
 oc apply -f examples/tcp/deployment.yaml
 ```
 
+Then create a service account under which to run the proxy, which
+needs view permission to determine the endpoints:
+
+```
+oc apply -f examples/serviceaccount.yaml
+```
+
 Then create the service proxy for the service(s):
 
 ```
