@@ -12,7 +12,7 @@ spec:
       labels:
         application: http-simple-proxy
     spec:
-      serviceAccountName: myrouter
+      serviceAccountName: icproxy
       containers:
       - name: proxy
         env:
