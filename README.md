@@ -25,6 +25,10 @@ First set up the router:
 oc apply -f examples/router.yaml
 ```
 
+(If using a router provisioned in some other way, you will need to
+create a secret to tell the proxy how to connect to that router. You
+can edit the examples/connect-info.yaml secret and apply that).
+
 Then deploy one (or both) of the example services:
 
 ```
@@ -85,6 +89,9 @@ and/or
 oc apply -f examples/deployer/tcp/service-proxy.yaml
 oc annotate service echo proxy.grs.github.com/network=myrouter proxy.grs.github.com/protocol=tcp
 ```
+
+Note that the network name needs to correspond to the name of a secret
+containing the connect.json details.
 
 You can then test as before:
 
