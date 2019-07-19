@@ -13,6 +13,7 @@
  */
 'use strict';
 
+var agent = require('../lib/agent.js');
 var kubernetes = require('../lib/kubernetes.js').client();
 var log = require("../lib/log.js").logger();
 
@@ -383,3 +384,11 @@ Deployer.prototype.deploy = function (service) {
 };
 
 var deployer = new Deployer(process.env.ICPROXY_SERVICE_ACCOUNT || 'icproxy');
+
+if (process.env.ROUTER_DEPLOY === 'directed') {
+    agent.directed(process.env.AGENT_NAME || 'icproxy-agent');
+} else if (process.env.ROUTER_DEPLOY === 'directable') {
+    agent.directable(process.env.AGENT_NAME || 'icproxy-agent');
+} else if (process.env.ROUTER_DEPLOY === 'standalone') {
+    agent.standalone(process.env.ROUTER_NAME || 'icproxy-router');
+}

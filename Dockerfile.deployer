@@ -1,4 +1,4 @@
-FROM enmasseproject/nodejs-base:6
+FROM registry.access.redhat.com/ubi8/nodejs-10
 
 RUN mkdir -p /opt/app-root/
 WORKDIR /opt/app-root/

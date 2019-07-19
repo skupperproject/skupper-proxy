@@ -1,0 +1,98 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: icproxy-director
+spec:
+  ports:
+  - name: amqps
+    port: 5671
+    targetPort: 5671
+  selector:
+    application: icproxy-director
+---
+kind: Route
+apiVersion: v1
+metadata:
+  name: icproxy-director
+  labels:
+    application: icproxy-director
+spec:
+  port:
+    targetPort: amqps
+  tls:
+    termination: passthrough
+  to:
+    kind: Service
+    name: icproxy-director
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: icproxy-director
+  labels:
+    application: icproxy-director
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      application: icproxy-director
+  template:
+    metadata:
+      labels:
+        application: icproxy-director
+    spec:
+      serviceAccountName: icproxy-deployer
+      containers:
+      - name: deployer
+        image: quay.io/gordons/icproxy-deployer:directed
+        imagePullPolicy: Always
+        command:
+        - node
+        args:
+        - /opt/app-root/bin/director.js
+        env:
+        - name: DEPLOYER_IMAGE
+          value: quay.io/gordons/icproxy-deployer:directed
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: icproxy
+  labels:
+    application: icproxy-deployer
+---
+apiVersion: v1
+kind: RoleBinding
+metadata:
+  labels:
+    application: icproxy-deployer
+  name: icproxy-view
+subjects:
+- kind: ServiceAccount
+  name: icproxy
+roleRef:
+  kind: Role
+  name: view
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: icproxy-deployer
+  labels:
+    application: icproxy-deployer
+---
+apiVersion: v1
+kind: RoleBinding
+metadata:
+  labels:
+    application: icproxy-deployer
+  name: icproxy-edit
+subjects:
+- kind: ServiceAccount
+  name: icproxy-deployer
+roleRef:
+  kind: Role
+  name: edit
+---
+

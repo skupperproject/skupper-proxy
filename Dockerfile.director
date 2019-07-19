@@ -1,0 +1,3 @@
+FROM quay.io/gordons/icproxy-deployer:directed
+
+CMD ["node", "/opt/app-root/bin/director.js"]

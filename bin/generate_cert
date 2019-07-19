@@ -1,0 +1,133 @@
+#!/usr/bin/bash
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+BASE=${BASEDIR:-/tmp}
+ISSUER=$1
+CERTNAME=$2
+CONFIG_HOST=${CONNECT_HOST:-$CERTNAME}
+CONFIG_PORT=${CONNECT_PORT:-5671}
+SUBJECT=$CERTNAME
+CADIR=$BASE/$ISSUER/ca
+CERTDIR=$BASE/$ISSUER/$CERTNAME
+
+SANS=()
+for ((i=2; i<=$#; ++i)); do
+  SANS+=( "${!i}" )
+done
+
+function write_password {
+    if [ -n "$PKCS12_PASSWORD" ]; then
+        echo $PKCS12_PASSWORD > $1
+    else
+        echo $(< /dev/urandom tr -dc _A-Z-a-z-0-9 | head -c8) > $1
+    fi
+}
+
+function generate_ca {
+    # Create the private key and self-signed certificate for the CA:
+    mkdir -p $CADIR
+    rm -rf $CADIR/*
+    openssl genrsa -out $CADIR/tls.key 2048
+    openssl req -new -batch -key $CADIR/tls.key -out $CADIR/ca-csr.pem -subj "/CN=$ISSUER"
+    openssl x509 -req -in $CADIR/ca-csr.pem -signkey $CADIR/tls.key -out $CADIR/tls.crt
+    write_password $CADIR/password.p12
+    openssl pkcs12 -export -nokeys -in $CADIR/tls.crt -out $CADIR/ca.p12 --passout file:$CADIR/password.p12
+}
+
+function generate_cert {
+    # Create a private key and certificate, signed by the CA for inter-router connections:
+    mkdir -p $CERTDIR
+    rm -rf $CERTDIR/*
+    cat << EOF > $CERTDIR/server-req.conf
+[req]
+default_bits       = 2048
+distinguished_name = dn
+req_extensions     = req_ext
+
+[dn]
+
+[req_ext]
+subjectAltName = @alt_names
+
+[alt_names]
+EOF
+    for i in ${!SANS[@]}; do
+        echo "DNS.$(( $i+1 )) = ${SANS[$i]}" >>  $CERTDIR/server-req.conf
+    done
+    cat $CERTDIR/server-req.conf
+    openssl req -out $CERTDIR/server-csr.pem -batch -newkey rsa:2048 -nodes -subj "/CN=$SUBJECT" -keyout $CERTDIR/tls.key -config $CERTDIR/server-req.conf -extensions req_ext
+    openssl x509 -req -in $CERTDIR/server-csr.pem -CA $CADIR/tls.crt -CAkey $CADIR/tls.key -out $CERTDIR/tls.crt -CAcreateserial -extfile $CERTDIR/server-req.conf -extensions req_ext
+}
+
+function generate_connect_json {
+    cat << EOF > $CERTDIR/connect.json
+{
+    "scheme": "amqps",
+    "host": "$CONFIG_HOST",
+    "port": "$CONFIG_PORT",
+    "tls": {
+        "ca": "/etc/messaging/ca.crt",
+        "cert": "/etc/messaging/tls.crt",
+        "key": "/etc/messaging/tls.key",
+        "verify": true
+    }
+}
+EOF
+}
+
+function generate_secret {
+    cat << EOF > $CERTDIR/secret.json
+{
+  "apiVersion": "v1",
+  "kind": "Secret",
+  "metadata": {
+    "name": "$CERTNAME"
+  },
+  "type": "kubernetes.io/tls",
+  "data": {
+    "connect.json": "$(base64 -w0 $CERTDIR/connect.json)",
+    "tls.crt": "$(base64 -w0 $CERTDIR/tls.crt)",
+    "tls.key": "$(base64 -w0 $CERTDIR/tls.key)",
+    "ca.crt": "$(base64 -w0 $CADIR/tls.crt)"
+  }
+}
+EOF
+}
+
+function generate_ca_secret {
+    cat << EOF > $CADIR/secret.json
+{
+  "apiVersion": "v1",
+  "kind": "Secret",
+  "metadata": {
+    "name": "$ISSUER"
+  },
+  "type": "kubernetes.io/tls",
+  "data": {
+    "tls.crt": "$(base64 -w0 $CADIR/tls.crt)",
+    "tls.key": "$(base64 -w0 $CADIR/tls.key)"
+  }
+}
+EOF
+}
+
+if [ ! -d $CADIR ]; then
+    generate_ca
+    generate_ca_secret
+fi
+if [ -n "$CERTNAME" ]; then
+    generate_cert
+    generate_connect_json
+    generate_secret
+fi
