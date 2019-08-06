@@ -9,7 +9,7 @@ cluster somewhere and the desired network needs to defined, including
 identifying all routers. The network definition uses the format from
 https://github.com/skubaproject/skoot/blob/master/network-configs/network1.conf
 (though without the Console element and the urls) and should be stored
-in a conifgmap, e.g.
+in a configmap which at present must be called 'icproxy-network', e.g.
 
 ```
 oc create configmap icproxy-network --from-file=network=./test-network.conf
