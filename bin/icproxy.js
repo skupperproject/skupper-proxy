@@ -57,10 +57,14 @@ OutgoingBridgeConfig.prototype.updated = function (pods) {
         }
         delete removed[host];
     }
-    for (var i in removed) {
-        var host = removed[i];
-        this.bridges[host].stop();
-        delete this.bridges[host];
+    for (var host in removed) {
+        if (this.bridges[host]) {
+            console.log('Stopping bridge for %s', host);
+            this.bridges[host].stop();
+            delete this.bridges[host];
+        } else {
+            console.log('Could not stop bridge for %s; no bridge found', host);
+        }
     }
 };
 
