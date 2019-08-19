@@ -16,7 +16,7 @@
 var kubernetes = require('../lib/kubernetes.js').client();
 var log = require("../lib/log.js").logger();
 
-const BASE_QUALIFIER = "grs.github.com";//TODO: replace with proper name
+const BASE_QUALIFIER = "skupper.github.com";//TODO: replace with proper name
 const PROXY_QUALIFIER = "proxy." + BASE_QUALIFIER;
 const ADDRESS = PROXY_QUALIFIER + "/address";
 const PROTOCOL = PROXY_QUALIFIER + "/protocol";
@@ -335,7 +335,7 @@ Deployer.prototype.deploy = function (service) {
                                 value: stringify_selector(original_selector)
                             }
                         ],
-                        image: 'quay.io/gordons/icproxy',
+                        image: 'quay.io/skupper/icproxy',
                         imagePullPolicy: 'IfNotPresent',
                         volumeMounts: [{
                             name: 'connect',

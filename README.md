@@ -80,14 +80,14 @@ oc apply -f examples/deployer/deployer.yaml
 
 ```
 oc apply -f examples/deployer/http/service-proxy.yaml
-oc annotate service myservice proxy.grs.github.com/network=myrouter
+oc annotate service myservice proxy.skupper.github.com/network=myrouter
 ```
 
 and/or
 
 ```
 oc apply -f examples/deployer/tcp/service-proxy.yaml
-oc annotate service echo proxy.grs.github.com/network=myrouter proxy.grs.github.com/protocol=tcp
+oc annotate service echo proxy.skupper.github.com/network=myrouter proxy.skupper.github.com/protocol=tcp
 ```
 
 Note that the network name needs to correspond to the name of a secret

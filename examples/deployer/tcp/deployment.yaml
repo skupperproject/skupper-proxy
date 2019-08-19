@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: echo
-        image: quay.io/gordons/tcp-echo
+        image: quay.io/skupper/tcp-echo
         imagePullPolicy: IfNotPresent
 ---
 apiVersion: v1

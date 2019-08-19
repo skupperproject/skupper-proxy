@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: simple
-        image: quay.io/gordons/simple-http
+        image: quay.io/skupper/simple-http
         imagePullPolicy: IfNotPresent
 ---
 apiVersion: v1

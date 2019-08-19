@@ -20,7 +20,7 @@ spec:
           value: "amqp:myservice=>http:8080,http:8080=>amqp:myservice"
         - name: ICPROXY_POD_SELECTOR
           value: "application=http-simple"
-        image: quay.io/gordons/icproxy
+        image: quay.io/skupper/icproxy
         imagePullPolicy: IfNotPresent
         volumeMounts:
         - name: connect

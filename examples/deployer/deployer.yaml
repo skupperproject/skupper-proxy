@@ -18,7 +18,7 @@ spec:
       serviceAccountName: icproxy-deployer
       containers:
       - name: deployer
-        image: quay.io/gordons/icproxy-deployer
+        image: quay.io/skupper/icproxy-deployer
 ---
 apiVersion: v1
 kind: ServiceAccount

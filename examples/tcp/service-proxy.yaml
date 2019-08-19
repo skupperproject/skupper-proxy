@@ -20,7 +20,7 @@ spec:
           value: "amqp:echo=>tcp:9090,tcp:9090=>amqp:echo"
         - name: ICPROXY_POD_SELECTOR
           value: "application=tcp-echo"
-        image: quay.io/gordons/icproxy
+        image: quay.io/skupper/icproxy
         imagePullPolicy: IfNotPresent
         volumeMounts:
         - name: connect
