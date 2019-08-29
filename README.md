@@ -80,18 +80,18 @@ oc apply -f examples/deployer/deployer.yaml
 
 ```
 oc apply -f examples/deployer/http/service-proxy.yaml
-oc annotate service myservice proxy.skupper.github.com/network=myrouter
+oc annotate service myservice skupper.io/proxy=html
 ```
 
 and/or
 
 ```
 oc apply -f examples/deployer/tcp/service-proxy.yaml
-oc annotate service echo proxy.skupper.github.com/network=myrouter proxy.skupper.github.com/protocol=tcp
+oc annotate service echo skupper.io/proxy=tcp
 ```
 
-Note that the network name needs to correspond to the name of a secret
-containing the connect.json details.
+Note that there needs to be a secret containing the connect.json
+details named 'skupper'.
 
 You can then test as before:
 
@@ -103,10 +103,10 @@ and/or
 telnet $(oc get service echo -o=jsonpath='{.spec.clusterIP}') 9090
 ```
 
-(The annotations could of course have been diretcly written in to the
+(The annotations could of course have been directly written in to the
 yaml in the first place. The above shows how an existing application
 could be modified to route traffic through the router).
 
-TODO: the removal of the network annotation should cause the service
+TODO: the removal of the proxy annotation should cause the service
 tobe restored to its original state and the proxy deployment to be
 deleted. That doesn't work yet.

@@ -14,16 +14,9 @@
 'use strict';
 
 var kubernetes = require('../lib/kubernetes.js').client();
+var labels = require("../lib/labels.js");
 var log = require("../lib/log.js").logger();
-
-const BASE_QUALIFIER = "skupper.github.com";//TODO: replace with proper name
-const PROXY_QUALIFIER = "proxy." + BASE_QUALIFIER;
-const ADDRESS = PROXY_QUALIFIER + "/address";
-const PROTOCOL = PROXY_QUALIFIER + "/protocol";
-const NETWORK = PROXY_QUALIFIER + "/network";
-const SERVICE = PROXY_QUALIFIER + "/service";
-const TYPE = BASE_QUALIFIER + "/type";
-const TYPE_PROXY = TYPE + '=proxy';
+var service_sync = require("../lib/service_sync.js");
 
 const DEPLOYMENT = {
     group: 'apps',
@@ -31,22 +24,38 @@ const DEPLOYMENT = {
     name: 'deployments',
 };
 
-function Deployer(service_account) {
+function Deployer(service_account, service_sync_origin) {
     this.service_account = service_account;
     this.service_watcher = kubernetes.watch('services');
     this.service_watcher.on('updated', this.services_updated.bind(this));
-    this.deployment_watcher = kubernetes.watch(DEPLOYMENT, undefined, TYPE_PROXY);
+    this.deployment_watcher = kubernetes.watch(DEPLOYMENT, undefined, labels.TYPE_PROXY);
     this.deployment_watcher.on('updated', this.deployments_updated.bind(this));
+    if (service_sync_origin) {
+        this.service_sync = service_sync(service_sync_origin);
+        this.service_watcher.on('updated', this.service_sync.updated.bind(this.service_sync));
+    }
 }
 
-function has_network_annotation (service) {
-    return service.metadata.annotations && service.metadata.annotations[NETWORK];
+function is_success_code(code) {
+    return code >= 200 && code < 300;
+}
+
+function has_proxy_annotation (service) {
+    return service.metadata.annotations && service.metadata.annotations[labels.PROXY];
+}
+
+function get_deployment_name(service) {
+    return service.metadata.name + '-proxy';
+}
+
+function get_network_name() {
+    return process.env.SKUPPER_CONNECT_SECRET || 'skupper';
 }
 
 Deployer.prototype.services_updated = function (services) {
-    log.info('services updated');
-    //any services with network set but deployed not set => deploy
-    services.filter(has_network_annotation).forEach(this.verify_deployment.bind(this));
+    log.info('services updated: %j', services.map(function (s) { return s.metadata.name; }));
+    //verify services with proxy annotation set have proxies deployed
+    services.filter(has_proxy_annotation).forEach(this.verify_deployment.bind(this));
 };
 
 Deployer.prototype.deployments_updated = function (deployments) {
@@ -60,7 +69,7 @@ Deployer.prototype.verify_deployment = function (service) {
     log.info('Verifying proxy deployment for %s', service.metadata.name);
     //ensure a proxy is deployed for the service and the service is
     //correctly configured for it
-    var deployment_name = service.metadata.name + '-icproxy';
+    var deployment_name = get_deployment_name(service);
     kubernetes.get(DEPLOYMENT, deployment_name).then(function (deployment) {
         self.reconcile(service, deployment);
     }).catch(function (code, description) {
@@ -80,13 +89,12 @@ Deployer.prototype.verify_deployment = function (service) {
 };
 
 Deployer.prototype.reconcile = function (service, deployment) {
-
-    var network = service.metadata.annotations[NETWORK];
-    if (network === undefined) {
+    var proxy = service.metadata.annotations[labels.PROXY];
+    if (proxy === undefined || proxy.match(/none/i)) {
         this.undeploy(service, deployment);
     } else {
         var update = false;
-        update = !this.verify_network(network, deployment);
+        update = !this.verify_network(get_network_name(), deployment);
         update = !this.verify_proxy_config(service, deployment);
 
         if (update) {
@@ -113,9 +121,9 @@ Deployer.prototype.reconcile = function (service, deployment) {
 
 Deployer.prototype.verify_matches_service = function (deployment) {
     var self = this;
-    var service_name = deployment.metadata.annotations[SERVICE];
+    var service_name = deployment.metadata.annotations[labels.SERVICE];
     if (service_name === undefined) {
-        log.error('Annotation %s not found on deployment %s', SERVICE, deployment.metadata.name);
+        log.error('Annotation %s not found on deployment %s', labels.SERVICE, deployment.metadata.name);
     } else {
         kubernetes.get('services', service_name).then(function (service) {
             self.reconcile(service, deployment);
@@ -159,9 +167,8 @@ function equivalent_proxy_config (a, b) {
 
 function get_proxy_config (service) {
     //TODO: support different protocols on different ports
-    //TODO: is http the right default? tcp is more conservative, but likely less commonly what is wanted
-    var protocol = service.metadata.annotations[PROTOCOL] || 'http';
-    var address = service.metadata.annotations[ADDRESS] || service.metadata.name;
+    var protocol = service.metadata.annotations[labels.PROXY];
+    var address = service.metadata.annotations[labels.ADDRESS] || service.metadata.name;
     var bridges = [];
     for (var i in service.spec.ports) {
         var port = service.spec.ports[i];
@@ -283,11 +290,11 @@ Deployer.prototype.undeploy = function (service, deployment) {
         return original;
     }).then(function (result) {
         var code = result.code;
-        if (code >=200 && code < 300) {
+        if (is_success_code(code)) {
             log.info('Restored selector for %s', service.metadata.name);
             log.info('Deleting deployment %s', deployment.metadata.name);
             kubernetes.delete_(DEPLOYMENT, deployment.metadata.name).then(function (code, description) {
-                if (code >=200 && code < 300) {
+                if (is_success_code(code)) {
                     log.info('Deleted deployment %s', deployment.metadata.name);
                 } else {
                     log.error('Failed to delete deployment %s: %s %s', deployment.metadata.name, code, description);
@@ -305,12 +312,12 @@ Deployer.prototype.undeploy = function (service, deployment) {
 
 Deployer.prototype.deploy = function (service) {
     var proxy_selector = {};
-    proxy_selector[SERVICE] = service.metadata.name;
-    var original_selector = service.spec.selector;
+    proxy_selector[labels.SERVICE] = service.metadata.name;
+    var original_selector = service.spec.selector || {'implements':service.metadata.name};
     // deploy the proxy
     var deployment = {
         metadata: {
-            name: service.metadata.name + '-icproxy', //TODO centralise this naming convention
+            name: get_deployment_name(service),
             annotations : {},
         },
         spec: {
@@ -336,7 +343,6 @@ Deployer.prototype.deploy = function (service) {
                             }
                         ],
                         image: 'quay.io/skupper/icproxy',
-                        imagePullPolicy: 'IfNotPresent',
                         volumeMounts: [{
                             name: 'connect',
                             mountPath: "/etc/messaging/"
@@ -345,18 +351,18 @@ Deployer.prototype.deploy = function (service) {
                     volumes: [{
                         name: 'connect',
                         secret: {
-                            secretName: service.metadata.annotations[NETWORK]
+                            secretName: get_network_name()
                         }
                     }]
                 }
             }
         }
     };
-    deployment.metadata.annotations[SERVICE] = service.metadata.name;
-    deployment.spec.template.metadata.labels[SERVICE] = service.metadata.name;
+    deployment.metadata.annotations[labels.SERVICE] = service.metadata.name;
+    deployment.spec.template.metadata.labels[labels.SERVICE] = service.metadata.name;
     log.info('Deploying proxy for %s', service.metadata.name);
     kubernetes.post(DEPLOYMENT, deployment).then(function (code, description) {
-        if (code >=200 && code < 300) {
+        if (is_success_code(code)) {
             log.info('Deployed proxy for %s', service.metadata.name);
             // change the selector
             log.info('Updating selector for %s', service.metadata.name);
@@ -365,7 +371,7 @@ Deployer.prototype.deploy = function (service) {
                 return original;
             }).then(function (result) {
                 var code = result.code;
-                if (code >=200 && code < 300) {
+                if (is_success_code(code)) {
                     log.info('Updated selector for %s', service.metadata.name);
                 } else {
                     log.error('Failed to update selector for %s: %s %j', service.metadata.name, code, result);
@@ -382,4 +388,4 @@ Deployer.prototype.deploy = function (service) {
 
 };
 
-var deployer = new Deployer(process.env.ICPROXY_SERVICE_ACCOUNT || 'icproxy');
+    var deployer = new Deployer(process.env.ICPROXY_SERVICE_ACCOUNT || 'icproxy', process.env.SKUPPER_SERVICE_SYNC_ORIGIN);
