@@ -16,6 +16,7 @@
 var kubernetes = require('../lib/kubernetes.js').client();
 var labels = require("../lib/labels.js");
 var log = require("../lib/log.js").logger();
+var service_utils = require("../lib/service_utils.js");
 var service_sync = require("../lib/service_sync.js");
 
 const DEPLOYMENT = {
@@ -33,6 +34,14 @@ function Deployer(service_account, service_sync_origin) {
     if (service_sync_origin) {
         this.service_sync = service_sync(service_sync_origin);
         this.service_watcher.on('updated', this.service_sync.updated.bind(this.service_sync));
+    }
+    if (process.env.OWNER_NAME && process.env.OWNER_UID) {
+        this.owner_references = [{
+            apiVersion: 'apps/v1',
+            kind: 'Deployment',
+            name: process.env.OWNER_NAME,
+            uid: process.env.OWNER_UID
+        }];
     }
 }
 
@@ -66,7 +75,7 @@ Deployer.prototype.deployments_updated = function (deployments) {
 
 Deployer.prototype.verify_deployment = function (service) {
     var self = this;
-    log.info('Verifying proxy deployment for %s', service.metadata.name);
+    log.info('Verifying proxy deployment for service %s', service.metadata.name);
     //ensure a proxy is deployed for the service and the service is
     //correctly configured for it
     var deployment_name = get_deployment_name(service);
@@ -94,8 +103,14 @@ Deployer.prototype.reconcile = function (service, deployment) {
         this.undeploy(service, deployment);
     } else {
         var update = false;
-        update = !this.verify_network(get_network_name(), deployment);
-        update = !this.verify_proxy_config(service, deployment);
+        if (!this.verify_proxy_config(service, deployment)) {
+            log.info('proxy config changed for deployment %s', deployment.metadata.name);
+            update = true;
+        }
+        if (!this.verify_proxy_pod_selector(service, deployment)) {
+            log.info('proxy pod selector changed for deployment %s', deployment.metadata.name);
+            update = true;
+        }
 
         if (update) {
             log.info('Updating proxy deployment %s', deployment.metadata.name);
@@ -104,12 +119,15 @@ Deployer.prototype.reconcile = function (service, deployment) {
             }).catch(function (code, error) {
                 log.error('Failed to update proxy deployment for %s: %s %s', deployment.metadata.name, code, error);
             });
+        } else {
+            log.info('No update required for proxy deployment %s', deployment.metadata.name);
         }
     }
 
     //check selector on service is as expected
     if (!this.verify_proxy_selector(service, deployment)) {
         log.info('Updating service selector for %s', service.metadata.name);
+        service_utils.set_last_applied(service);
         kubernetes.put('services', service).then(function () {
             log.info('Updated service selector for %s', service.metadata.name);
         }).catch(function (code, error) {
@@ -120,6 +138,7 @@ Deployer.prototype.reconcile = function (service, deployment) {
 }
 
 Deployer.prototype.verify_matches_service = function (deployment) {
+    log.info('Verifying that service matches deployment %s', deployment.metadata.name);
     var self = this;
     var service_name = deployment.metadata.annotations[labels.SERVICE];
     if (service_name === undefined) {
@@ -152,11 +171,33 @@ function equivalent_selector (a, b) {
     return true;
 }
 
+//verify that the service selector matches the deployment (which will be the proxy deployment)
 Deployer.prototype.verify_proxy_selector = function (service, deployment) {
     if (equivalent_selector(service.spec.selector, deployment.spec.selector.matchLabels)) {
         return true;
     } else {
+        service.metadata.annotations[labels.ORIGINAL_SELECTOR] = stringify_selector(service.spec.selector);
         service.spec.selector = deployment.spec.selector.matchLabels;
+        return false;
+    }
+};
+
+//verify that the proxy is targetting the right set of pods
+Deployer.prototype.verify_proxy_pod_selector = function (service, deployment) {
+    var desired = service.metadata.annotations[labels.ORIGINAL_SELECTOR];
+    if (desired === undefined) {
+        if (!equivalent_selector(service.spec.selector, deployment.spec.selector.matchLabels)) {
+            desired = stringify_selector(service.spec.selector);
+        } else {
+            log.error('Cannot determine correct pod selector for proxy from service %s, deployment %s', service.metadata.name, deployment.metadata.name);
+            return true;//can't update deployment
+        }
+    }
+    var actual = get_container_env_value(deployment, 'proxy', 'ICPROXY_POD_SELECTOR');
+    if (actual === desired) {
+        return true;
+    } else {
+        set_container_env_value(deployment, 'proxy', 'ICPROXY_POD_SELECTOR', desired)
         return false;
     }
 };
@@ -187,31 +228,10 @@ Deployer.prototype.verify_proxy_config = function (service, deployment) {
         return true;
     } else {
         set_container_env_value(deployment, 'proxy', 'ICPROXY_CONFIG', desired.join(','))
+        log.info('updated proxy config for %s: %j', deployment.metadata.name, desired);
         return false;
     }
 };
-
-Deployer.prototype.verify_network = function (network, deployment) {
-    function match_network (volume) {
-        return volume.secret === network;
-    }
-    //does the deployment have a connect.json mounted in for the
-    //correct network?
-    if (deployment.spec.template.spec.volumes && deployment.spec.template.spec.volumes.connect) {
-        if (deployment.spec.template.spec.volumes.connect.secret === network) {
-            return true;
-        } else {
-            deployment.spec.template.spec.volumes.connect.secret = network;
-            return false;
-        }
-    } else {
-        //TODO: need to mount in any credentials required for connect as well
-        deployment.spec.template.spec.volumes = [{name: 'connect', secret: { secretName: network }}];
-        // now also need to verify the volumeMounts in deployment.spec.template.spec.containers.proxy
-        return false;
-    }
-};
-
 
 function stringify_selector (selector) {
     var elements = [];
@@ -272,6 +292,8 @@ function set_container_env_value(deployment, container_name, key, value) {
     var container = get_container(deployment, container_name);
     if (container) {
         set_env_value(container.env, key, value);
+    } else {
+        log.error('Could not set env var %s on container %s: no such container in %s', key, container_name, deployment.metadata.name);
     }
 }
 
@@ -287,6 +309,7 @@ Deployer.prototype.undeploy = function (service, deployment) {
     log.info('Restoring selector for %s', service.metadata.name);
     kubernetes.update('services', service.metadata.name, function (original) {
         original.spec.selector = selector;
+        service_utils.set_last_applied(original);
         return original;
     }).then(function (result) {
         var code = result.code;
@@ -310,10 +333,14 @@ Deployer.prototype.undeploy = function (service, deployment) {
     });
 };
 
+function get_proxy_selector(service) {
+    var o = {};
+    o[labels.SERVICE] = service.metadata.name;
+    return o;
+}
+
 Deployer.prototype.deploy = function (service) {
-    var proxy_selector = {};
-    proxy_selector[labels.SERVICE] = service.metadata.name;
-    var original_selector = service.spec.selector || {'implements':service.metadata.name};
+    var original_selector = stringify_selector(service.spec.selector);
     // deploy the proxy
     var deployment = {
         metadata: {
@@ -322,7 +349,7 @@ Deployer.prototype.deploy = function (service) {
         },
         spec: {
             selector: {
-                matchLabels: proxy_selector,
+                matchLabels: get_proxy_selector(service),
             },
             template : {
                 metadata: {
@@ -339,7 +366,7 @@ Deployer.prototype.deploy = function (service) {
                             },
                             {
                                 name: 'ICPROXY_POD_SELECTOR',
-                                value: stringify_selector(original_selector)
+                                value: original_selector
                             }
                         ],
                         image: 'quay.io/skupper/icproxy',
@@ -358,6 +385,9 @@ Deployer.prototype.deploy = function (service) {
             }
         }
     };
+    if (this.owner_references) {
+        deployment.metadata.ownerReferences = this.owner_references;
+    }
     deployment.metadata.annotations[labels.SERVICE] = service.metadata.name;
     deployment.spec.template.metadata.labels[labels.SERVICE] = service.metadata.name;
     log.info('Deploying proxy for %s', service.metadata.name);
@@ -367,7 +397,9 @@ Deployer.prototype.deploy = function (service) {
             // change the selector
             log.info('Updating selector for %s', service.metadata.name);
             kubernetes.update('services', service.metadata.name, function (original) {
-                original.spec.selector = proxy_selector;
+                original.spec.selector = get_proxy_selector(service);
+                original.metadata.annotations[labels.ORIGINAL_SELECTOR] = original_selector;
+                service_utils.set_last_applied(original);
                 return original;
             }).then(function (result) {
                 var code = result.code;
@@ -384,8 +416,9 @@ Deployer.prototype.deploy = function (service) {
         }
     }).catch(function (code, error) {
         log.error('Failed to deploy proxy for %s: %s %s', service.metadata.name, code, error);
+        console.error(error);
     });
 
 };
 
-    var deployer = new Deployer(process.env.ICPROXY_SERVICE_ACCOUNT || 'icproxy', process.env.SKUPPER_SERVICE_SYNC_ORIGIN);
+var deployer = new Deployer(process.env.ICPROXY_SERVICE_ACCOUNT || 'icproxy', process.env.SKUPPER_SERVICE_SYNC_ORIGIN);
