@@ -80,7 +80,7 @@ oc apply -f examples/deployer/deployer.yaml
 
 ```
 oc apply -f examples/deployer/http/service-proxy.yaml
-oc annotate service myservice skupper.io/proxy=html
+oc annotate service myservice skupper.io/proxy=http
 ```
 
 and/or
