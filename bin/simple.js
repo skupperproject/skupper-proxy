@@ -57,10 +57,14 @@ function Proxy(config) {
         var bridgeconfig = bridgeconfigs[i];
         if (bridgeconfig.type === "amqp_to_http") {
             bridges.amqp_to_http(bridgeconfig.source, 'localhost', bridgeconfig.target)
+        } else if (bridgeconfig.type === "amqp_to_http2") {
+            bridges.amqp_to_http2(bridgeconfig.source, 'localhost', bridgeconfig.target)
         } else if (bridgeconfig.type === "amqp_to_tcp") {
             bridges.amqp_to_tcp(bridgeconfig.source, 'localhost', bridgeconfig.target)
         } else if (bridgeconfig.type === "http_to_amqp") {
             bridges.http_to_amqp(bridgeconfig.source, bridgeconfig.target);
+        } else if (bridgeconfig.type === "http2_to_amqp") {
+            bridges.http2_to_amqp(bridgeconfig.source, bridgeconfig.target);
         } else if (bridgeconfig.type === "tcp_to_amqp") {
             bridges.tcp_to_amqp(bridgeconfig.source, bridgeconfig.target);
         } else {
