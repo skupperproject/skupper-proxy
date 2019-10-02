@@ -16,6 +16,7 @@
 var kubernetes = require('../lib/kubernetes.js').client();
 var labels = require("../lib/labels.js");
 var log = require("../lib/log.js").logger();
+var owner_ref = require("../lib/owner_ref.js");
 var service_utils = require("../lib/service_utils.js");
 var service_sync = require("../lib/service_sync.js");
 
@@ -34,14 +35,6 @@ function Deployer(service_account, service_sync_origin) {
     if (service_sync_origin) {
         this.service_sync = service_sync(service_sync_origin);
         this.service_watcher.on('updated', this.service_sync.updated.bind(this.service_sync));
-    }
-    if (process.env.OWNER_NAME && process.env.OWNER_UID) {
-        this.owner_references = [{
-            apiVersion: 'apps/v1',
-            kind: 'Deployment',
-            name: process.env.OWNER_NAME,
-            uid: process.env.OWNER_UID
-        }];
     }
 }
 
@@ -385,9 +378,7 @@ Deployer.prototype.deploy = function (service) {
             }
         }
     };
-    if (this.owner_references) {
-        deployment.metadata.ownerReferences = this.owner_references;
-    }
+    owner_ref.set_owner_references(deployment);
     deployment.metadata.annotations[labels.SERVICE] = service.metadata.name;
     deployment.spec.template.metadata.labels[labels.SERVICE] = service.metadata.name;
     log.info('Deploying proxy for %s', service.metadata.name);
