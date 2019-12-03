@@ -68,78 +68,84 @@ OutgoingBridgeConfig.prototype.updated = function (pods) {
     }
 };
 
-function bridge_addr(config) {
-    var parts = config.split(':');
-    if (parts.length == 2) {
+function get_bridging_functions(protocol) {
+    if (protocol === 'http') {
         return {
-            protocol: parts[0].toLowerCase(),
-            addr: parts[1]
+            ingress: bridges.http_to_amqp,
+            egress: bridges.amqp_to_http
+        };
+    } else if (protocol === 'tcp') {
+        return {
+            ingress: bridges.tcp_to_amqp,
+            egress: bridges.amqp_to_tcp
+        };
+    } else if (protocol === 'http2') {
+        return {
+            ingress: bridges.http2_to_amqp,
+            egress: bridges.amqp_to_http2
         };
     } else {
         return undefined;
     }
 }
 
-function bridge_type(source_protocol, target_protocol) {
-    return source_protocol + "_to_" + target_protocol;
+function get_ordinal(hostname) {
+    var matches = hostname.match(/\d+$/);
+    if (matches) {
+        return parseInt(matches[0]);
+    } else {
+        log.error('Could not determine ordinal for %s', hostname);
+        return 0;
+    }
 }
 
-function bridge_config(config) {
-    var parts = config.split('=>');
-    if (parts.length == 2) {
-        var source = bridge_addr(parts[0]);
-        var target = bridge_addr(parts[1]);
-        if (source === undefined || target === undefined) {
-            return undefined;
+function get_target_pod_name(hostname, statefulset) {
+    return statefulset + '-' + get_ordinal(hostname);
+}
+
+function Proxy(config) {
+    var bridging = get_bridging_functions(config.protocol);
+    if (bridging) {
+        if (config.headless === undefined) {
+            var address = config.address || config.name;
+            this.ingress = bridging.ingress(config.port, address);
+
+            if (config.targets) {
+                this.egress = config.targets.map(function (target) {
+                    if (target.selector) {
+                        var targets = kubernetes.watch('pods', undefined, target.selector);
+                        return new OutgoingBridgeConfig(address, target.targetPort || config.port, bridging.egress, targets);
+                    } else {
+                        console.error('Ignoring target %s; no selector defined.', target.name);
+                        return {};
+                    }
+                });
+            }
         } else {
-            return {
-                type: bridge_type(source.protocol, target.protocol),
-                source: source.addr,
-                target: target.addr
-            };
+            //for headless services, only have ingress on remote sites, and only have egress on local site
+            if (config.origin) {
+                var address = [config.address || config.name, process.env.HOSTNAME].join('.');
+                this.ingress = bridging.ingress(config.port, address);
+            } else {
+                var podname = get_target_pod_name(process.env.HOSTNAME, config.headless.name);
+                var address = [config.address || config.name, podname].join('.');
+                var targetPort = config.headless.targetPort || config.port;
+                var host = [podname, config.name || config.address, process.env.NAMESPACE, 'svc.cluster.local'].join('.');
+                this.egress = bridging.egress(address, host, targetPort);
+            }
         }
     } else {
-        return undefined;
+        console.error('Unrecognised protocol: %s', config.protocol);
     }
 }
 
-function create_bridge(config_string) {
-    var config = bridge_config(config_string);
-    if (config === undefined) {
-        console.error('Skipping malformed bridge: %s', config_string);
-        return undefined;
-    } else {
-        return bridges.create(config);
-    }
-}
+process.on('SIGTERM', function () {
+    console.log('Exiting due to SIGTERM');
+    process.exit();
+});
 
-function Proxy(config, selector) {
-    var targets = kubernetes.watch('pods', undefined, selector);
-    var bridgeconfigs = config.split(',').map(bridge_config).filter(function (bridge) { return bridge !== undefined; });
-    for (var i in bridgeconfigs) {
-        var bridgeconfig = bridgeconfigs[i];
-        if (bridgeconfig.type === "amqp_to_http") {
-            new OutgoingBridgeConfig(bridgeconfig.source, bridgeconfig.target, bridges.amqp_to_http, targets);
-        } else if (bridgeconfig.type === "amqp_to_http2") {
-            new OutgoingBridgeConfig(bridgeconfig.source, bridgeconfig.target, bridges.amqp_to_http2, targets);
-        } else if (bridgeconfig.type === "amqp_to_tcp") {
-            new OutgoingBridgeConfig(bridgeconfig.source, bridgeconfig.target, bridges.amqp_to_tcp, targets);
-        } else if (bridgeconfig.type === "http_to_amqp") {
-            bridges.http_to_amqp(bridgeconfig.source, bridgeconfig.target);
-        } else if (bridgeconfig.type === "http2_to_amqp") {
-            bridges.http2_to_amqp(bridgeconfig.source, bridgeconfig.target);
-        } else if (bridgeconfig.type === "tcp_to_amqp") {
-            bridges.tcp_to_amqp(bridgeconfig.source, bridgeconfig.target);
-        } else {
-            console.error("Unrecognised bridge type: %s", bridgeconfig.type);
-        }
-    }
-}
-
-if (process.env.ICPROXY_CONFIG === undefined) {
-    console.error('ICPROXY_CONFIG must be set');
-} else if (process.env.ICPROXY_POD_SELECTOR === undefined) {
-    console.error('ICPROXY_POD_SELECTOR must be set');
+if (process.env.SKUPPER_PROXY_CONFIG === undefined) {
+    console.error('SKUPPER_PROXY_CONFIG must be set');
 } else {
-    var proxy = new Proxy(process.env.ICPROXY_CONFIG, process.env.ICPROXY_POD_SELECTOR);
+    var proxy = new Proxy(JSON.parse(process.env.SKUPPER_PROXY_CONFIG));
 }

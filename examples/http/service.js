@@ -18,7 +18,7 @@ var http = require('http');
 var server = http.createServer(function (request, response) {
     console.log('%s %s on %s', request.method, request.url, request.headers.host);
     response.statusCode = 200;
-    response.end(request.method + ' ' + request.url + ' handled by ' + process.env.HOSTNAME);
+    response.end(request.method + ' ' + request.url + ' from ' + request.socket.remoteAddress + ' handled by ' + process.env.HOSTNAME + '\n');
 });
 server.listen(process.env.PORT || 8080, function () {
     console.log('listening on %s', server.address().port);
