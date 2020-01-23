@@ -50,17 +50,17 @@ function bridge_config(config) {
     }
 }
 
-function Proxy(config) {
-    console.log("Proxying %s", config);
+function Proxy(config, bridgehost) {
+    console.log("Proxying %s to %s", config, bridgehost);
     var bridgeconfigs = config.split(',').map(bridge_config).filter(function (bridge) { return bridge !== undefined; });
     for (var i in bridgeconfigs) {
         var bridgeconfig = bridgeconfigs[i];
         if (bridgeconfig.type === "amqp_to_http") {
-            bridges.amqp_to_http(bridgeconfig.source, 'localhost', bridgeconfig.target)
+            bridges.amqp_to_http(bridgeconfig.source, bridgehost, bridgeconfig.target)
         } else if (bridgeconfig.type === "amqp_to_http2") {
-            bridges.amqp_to_http2(bridgeconfig.source, 'localhost', bridgeconfig.target)
+            bridges.amqp_to_http2(bridgeconfig.source, bridgehost, bridgeconfig.target)
         } else if (bridgeconfig.type === "amqp_to_tcp") {
-            bridges.amqp_to_tcp(bridgeconfig.source, 'localhost', bridgeconfig.target)
+            bridges.amqp_to_tcp(bridgeconfig.source, bridgehost, bridgeconfig.target)
         } else if (bridgeconfig.type === "http_to_amqp") {
             bridges.http_to_amqp(bridgeconfig.source, bridgeconfig.target);
         } else if (bridgeconfig.type === "http2_to_amqp") {
@@ -73,4 +73,9 @@ function Proxy(config) {
     }
 }
 
-var proxy = new Proxy(process.argv[2]);
+var bridgehost = 'localhost'
+if (process.env.ICPROXY_BRIDGE_HOST !== undefined) {
+    bridgehost = process.env.ICPROXY_BRIDGE_HOST
+}
+
+var proxy = new Proxy(process.argv[2], bridgehost);
