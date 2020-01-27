@@ -62,7 +62,7 @@ function Proxy(config, bridgehost) {
         } else if (bridgeconfig.type === "amqp_to_tcp") {
             bridges.amqp_to_tcp(bridgeconfig.source, bridgehost, bridgeconfig.target)
         } else if (bridgeconfig.type === "http_to_amqp") {
-            bridges.http_to_amqp(bridgeconfig.source, bridgeconfig.target);
+            bridges.http_to_amqp(bridgeconfig.source, bridgeconfig.target, bridgehost);
         } else if (bridgeconfig.type === "http2_to_amqp") {
             bridges.http2_to_amqp(bridgeconfig.source, bridgeconfig.target);
         } else if (bridgeconfig.type === "tcp_to_amqp") {
