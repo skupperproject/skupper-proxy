@@ -13,17 +13,39 @@
  */
 'use strict';
 
-var enlist = require("../lib/enlist.js");
+var fs = require('fs');
+var path = require('path');
+
+var enlist = require('../lib/enlist.js');
 var kubernetes = require('../lib/kubernetes.js').client();
-var labels = require("../lib/labels.js");
-var log = require("../lib/log.js").logger();
-var owner_ref = require("../lib/owner_ref.js");
-var scaling = require("../lib/statefulset_scaling.js")();
-var service_utils = require("../lib/service_utils.js");
-var service_sync = require("../lib/service_sync.js");
+var labels = require('../lib/labels.js');
+var log = require('../lib/log.js').logger();
+var metrics = require('../lib/metrics.js');
+var owner_ref = require('../lib/owner_ref.js');
+var scaling = require('../lib/statefulset_scaling.js')();
+var service_utils = require('../lib/service_utils.js');
+var service_sync = require('../lib/service_sync.js');
+
+function auth(dir) {
+    if (dir) {
+        return function (username, password) {
+            return new Promise (function (resolve, reject) {
+                fs.readFile(path.resolve(dir, username), 'utf8', function (err, data) {
+                    if (err) {
+                        log.info('Error authenticating %s: %s', username, err)
+                    }
+                    resolve(!err && data.toString() === password);
+                });
+            });
+        };
+    } else {
+        return undefined;
+    }
+}
 
 function Deployer(service_account, service_sync_origin) {
     this.service_account = service_account;
+    this.origin = service_sync_origin;
 
     this.service_watcher = kubernetes.watch('services');
     this.service_watcher.on('updated', this.services_updated.bind(this));
@@ -40,6 +62,7 @@ function Deployer(service_account, service_sync_origin) {
     if (!process.env.DISABLE_ENLIST_FROM_ANNOTATIONS) {
         this.enlist = enlist();
     }
+    this.metrics_server = metrics.create_server(this.origin, process.env.METRICS_PORT || 8080, process.env.METRICS_HOST, auth(process.env.METRICS_USERS));
 }
 
 function is_success_code(code) {
@@ -416,7 +439,7 @@ Deployer.prototype.recreate_service = function (name, desired_service) {
             if (desired_service.headless) {
                 service.spec.clusterIP = 'None';
             }
-            service.metadata.annotations[labels.CONTROLLED] = "true";
+            service.metadata.annotations[labels.CONTROLLED] = 'true';
             owner_ref.set_owner_references(service);
             service_utils.set_last_applied(service);
             console.log('Recreating service %j', service);
@@ -460,7 +483,7 @@ Deployer.prototype.create_service = function (name, desired_service) {
     if (desired_service.headless) {
         service.spec.clusterIP = 'None';
     }
-    service.metadata.annotations[labels.CONTROLLED] = "true";
+    service.metadata.annotations[labels.CONTROLLED] = 'true';
     owner_ref.set_owner_references(service);
     console.log('Creating service %j', service);
     kubernetes.post('services', service).then(function (code, data) {
@@ -537,12 +560,16 @@ Deployer.prototype.deploy = function (service_name, config) {
                             {
                                 name: 'SKUPPER_PROXY_CONFIG',
                                 value: JSON.stringify(config)
+                            },
+                            {
+                                name: 'SKUPPER_SITE_ID',
+                                value: this.origin
                             }
                         ],
                         image: process.env.SKUPPER_PROXY_IMAGE || 'quay.io/skupper/proxy',
                         volumeMounts: [{
                             name: 'connect',
-                            mountPath: "/etc/messaging/"
+                            mountPath: '/etc/messaging/'
                         }],
                     }],
                     volumes: [{
@@ -614,7 +641,7 @@ Deployer.prototype.deploy_as_statefulset = function (service_name, config) {
                         image: process.env.SKUPPER_PROXY_IMAGE || 'quay.io/skupper/proxy',
                         volumeMounts: [{
                             name: 'connect',
-                            mountPath: "/etc/messaging/"
+                            mountPath: '/etc/messaging/'
                         }],
                     }],
                     volumes: [{
