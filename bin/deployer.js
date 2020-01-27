@@ -71,6 +71,14 @@ function get_network_name() {
     return process.env.SKUPPER_CONNECT_SECRET || 'skupper';
 }
 
+function is_owned(service) {
+    return service.metadata.annotations && service.metadata.annotations[labels.CONTROLLED] && owner_ref.is_owner(service);
+}
+
+function has_original_selector(service) {
+    return service.metadata.annotations && service.metadata.annotations[labels.ORIGINAL_SELECTOR];
+}
+
 Deployer.prototype.process_annotated_services = function (services) {
     //verify services with proxy annotation set have proxies deployed
     services.filter(has_proxy_annotation).forEach(this.verify_deployment.bind(this));
@@ -206,7 +214,9 @@ Deployer.prototype.ensure_service_for = function (name) {
                 this.create_service(name, desired);
             } else {
                 var selector = get_proxy_selector(name);
-                if (actual.spec.ports[0].port !== desired.port || !equivalent_selector(actual.spec.selector, selector) || actual.spec.clusterIP != 'None') {
+                if (actual.spec.clusterIP != 'None') {
+                    this.recreate_service(name, desired);
+                } else if (actual.spec.ports[0].port !== desired.port || !equivalent_selector(actual.spec.selector, selector)) {
                     this.update_service(name, desired);
                 } else {
                     log.info('Service for %s already defined', name);
@@ -217,8 +227,20 @@ Deployer.prototype.ensure_service_for = function (name) {
         if (actual === undefined) {
             this.create_service(name, desired);
         } else {
-            if ((actual.spec.ports[0].port !== desired.port || !equivalent_selector(actual.spec.selector, desired.selector)) && desired.clobber) {
-                this.update_service(name, desired);
+            var selector = get_proxy_selector(name);
+            if (actual.spec.ports[0].port !== desired.port || !equivalent_selector(actual.spec.selector, selector)) {
+                if (actual.spec.ports[0].port !== desired.port) {
+                    log.info('Port does not match for service %s: expected %j, have %j', name, desired.port, actual.spec.ports[0].port);
+                }
+                if (!equivalent_selector(actual.spec.selector, selector)) {
+                    log.info('Selector does not match for service %s: expected %j, have %j', name, selector, actual.spec.selector);
+                }
+                if (is_owned(actual) || desired.clobber) {
+                    log.info('Updating service for %s %s', name, desired.clobber ? '(clobber enabled)' : '');
+                    this.update_service(name, desired);
+                } else {
+                    log.warn('Service %s already exists with different configuration');
+                }
             } else {
                 log.info('Service for %s already defined', name);
             }
@@ -259,9 +281,11 @@ Deployer.prototype.reconcile = function () {
         for (var name in this.actual_services) {
             if (this.desired_services[name] === undefined) {
                 var actual = this.actual_services[name];
-                if (actual.metadata.annotations && actual.metadata.annotations[labels.CONTROLLED] && owner_ref.is_owner(actual)) {
+                if (is_owned(actual)) {
                     log.info('Deleting service %s', name);
                     this.delete_service(name);
+                } else if (has_original_selector(actual)) {
+                    this.restore_service(actual);
                 }
             }
         }
@@ -296,6 +320,19 @@ function selector_from_string (selector) {
     for (var i in elements) {
         var parts = elements[i].split('=');
         result[parts[0]] = parts[1];
+    }
+    return result;
+}
+
+function selector_to_string (selector) {
+    var result;
+    for (var key in selector) {
+        var element = key + '=' + selector[key];
+        if (result === undefined) {
+            result = element;
+        } else {
+            result += ',' + element;
+        }
     }
     return result;
 }
@@ -352,6 +389,53 @@ function get_proxy_selector(service_name) {
     return o;
 }
 
+Deployer.prototype.recreate_service = function (name, desired_service) {
+    kubernetes.delete_('services', name).then(function (code, data) {
+        if (is_success_code(code)) {
+            log.info('Deleted service %s, will recreate', name);
+
+            var service = {
+                apiVersion: 'v1',
+                kind: 'Service',
+                metadata: {
+                    name: name,
+                    annotations: {}
+                },
+                spec: {
+                    //TODO: consider support for multiple ports on same service?
+                    ports: [
+                        {
+                            name: name,
+                            port: desired_service.port
+                        }
+                    ],
+                    selector: get_proxy_selector(name)
+                }
+            };
+            if (desired_service.headless) {
+                service.spec.clusterIP = 'None';
+            }
+            service.metadata.annotations[labels.CONTROLLED] = "true";
+            owner_ref.set_owner_references(service);
+            service_utils.set_last_applied(service);
+            console.log('Recreating service %j', service);
+            kubernetes.post('services', service).then(function (code, data) {
+                if (is_success_code(code)) {
+                    log.info('Created service for %s', name);
+                } else {
+                    log.error('Failed to create service for %s: %s %j', name, code, data);
+                }
+            }).catch(function (error) {
+                log.error('Error while (re)creating service for %s: %s', name, error);
+            });
+        } else {
+            log.error('Failed to create service for %s: %s %j', name, code, data);
+        }
+    }).catch(function (error) {
+        log.error('Error while deleting service to be recreated %s: %s', name, error);
+    });
+};
+
 Deployer.prototype.create_service = function (name, desired_service) {
     var service = {
         apiVersion: 'v1',
@@ -376,7 +460,6 @@ Deployer.prototype.create_service = function (name, desired_service) {
     }
     service.metadata.annotations[labels.CONTROLLED] = "true";
     owner_ref.set_owner_references(service);
-    service_utils.set_last_applied(service);
     console.log('Creating service %j', service);
     kubernetes.post('services', service).then(function (code, data) {
         if (is_success_code(code)) {
@@ -389,16 +472,31 @@ Deployer.prototype.create_service = function (name, desired_service) {
     });
 };
 
+function restore_service(service) {
+    kubernetes.update('services', service.metadata.name, function (original) {
+        original.spec.selector = selector_from_string(original.metadata.annotations[labels.ORIGINAL_SELECTOR]);
+        delete original.metadata.annotations[labels.ORIGINAL_SELECTOR];
+        return original;
+    }).then(function (result) {
+        var code = result.code;
+        if (is_success_code(code)) {
+            log.info('Updated service for %s', name);
+        } else {
+            log.error('Failed to update service for %s: %s %j', name, code, result);
+        }
+    }).catch(function (code, error) {
+        log.error('Failed to update service for %s: %s %s', name, code, error);
+    });
+};
+
 Deployer.prototype.update_service = function (name, desired_service) {
     kubernetes.update('services', name, function (original) {
-        original.spec.selector = get_proxy_selector(name);
-        original.spec.ports[0].port = desired_service.port
-        original.metadata.annotations[labels.CONTROLLED] = true;
-        if (desired_service.headless) {
-            original.spec.clusterIP = 'None';
+        var desired_selector = get_proxy_selector(name);
+        if (!equivalent_selector(original.spec.selector, desired_selector)) {
+            original.metadata.annotations[labels.ORIGINAL_SELECTOR] = selector_to_string(original.spec.selector);
+            original.spec.selector = desired_selector;
         }
-        owner_ref.set_owner_references(original);
-        service_utils.set_last_applied(original);
+        original.spec.ports[0].port = desired_service.port;
         return original;
     }).then(function (result) {
         var code = result.code;
