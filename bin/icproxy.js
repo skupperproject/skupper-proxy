@@ -14,7 +14,10 @@
 'use strict';
 
 var bridges = require('../lib/bridges.js');
+var eventchannel = require('../lib/eventchannel.js');
+var multicast = require('../lib/multicast.js');
 var kubernetes = require('../lib/kubernetes.js').client();
+var metrics = require('../lib/metrics.js');
 
 function is_pod_running(pod) {
     return pod.status.phase === 'Running';
@@ -36,12 +39,13 @@ function get_pod_ip(pod) {
     return pod.status.podIP;
 }
 
-function OutgoingBridgeConfig(address, target_port, factory, targets) {
+function OutgoingBridgeConfig(address, target_port, factory, targets, metrics) {
     this.address = address;
     this.target_port = target_port;
     this.factory = factory;
     this.bridges = {};
     targets.on('updated', this.updated.bind(this));
+    this.metrics = metrics;
 }
 
 OutgoingBridgeConfig.prototype.updated = function (pods) {
@@ -54,6 +58,8 @@ OutgoingBridgeConfig.prototype.updated = function (pods) {
         var host = hosts[i];
         if (this.bridges[host] === undefined) {
             this.bridges[host] = this.factory(this.address, host, this.target_port);
+            this.bridges[host].metrics = this.metrics;
+            this.bridges[host].site_id = process.env.SKUPPER_SITE_ID;
         }
         delete removed[host];
     }
@@ -68,12 +74,26 @@ OutgoingBridgeConfig.prototype.updated = function (pods) {
     }
 };
 
-function get_bridging_functions(protocol) {
+function get_bridging_functions(protocol, config) {
     if (protocol === 'http') {
-        return {
-            ingress: bridges.http_to_amqp,
-            egress: bridges.amqp_to_http
-        };
+        if (config.aggregate) {
+            return {
+                ingress: function (port, address) {
+                    return multicast.http_to_amqp(port, address, config.aggregate)
+                },
+                egress: multicast.amqp_to_http
+            };
+        } else if (config.eventchannel) {
+            return {
+                ingress: eventchannel.http_to_amqp,
+                egress: eventchannel.amqp_to_http
+            };
+        } else {
+            return {
+                ingress: bridges.http_to_amqp,
+                egress: bridges.amqp_to_http
+            };
+        }
     } else if (protocol === 'tcp') {
         return {
             ingress: bridges.tcp_to_amqp,
@@ -104,17 +124,20 @@ function get_target_pod_name(hostname, statefulset) {
 }
 
 function Proxy(config) {
-    var bridging = get_bridging_functions(config.protocol);
+    var bridging = get_bridging_functions(config.protocol, config);
     if (bridging) {
         if (config.headless === undefined) {
             var address = config.address || config.name;
             this.ingress = bridging.ingress(Math.max(config.port, 1024), address);
+            var _metrics = metrics.create_bridge_metrics(address, config.protocol, process.env.SKUPPER_SITE_ID);
+            this.ingress.metrics = _metrics;
+            this.ingress.site_id = process.env.SKUPPER_SITE_ID;
 
             if (config.targets) {
                 this.egress = config.targets.map(function (target) {
                     if (target.selector) {
                         var targets = kubernetes.watch('pods', undefined, target.selector);
-                        return new OutgoingBridgeConfig(address, target.targetPort || config.port, bridging.egress, targets);
+                        return new OutgoingBridgeConfig(address, target.targetPort || config.port, bridging.egress, targets, _metrics);
                     } else {
                         console.error('Ignoring target %s; no selector defined.', target.name);
                         return {};
@@ -126,12 +149,14 @@ function Proxy(config) {
             if (config.origin) {
                 var address = [config.address || config.name, process.env.HOSTNAME].join('.');
                 this.ingress = bridging.ingress(config.port, address);
+                this.ingress.metrics = metrics.create_bridge_metrics(address, config.protocol, process.env.SKUPPER_SITE_ID);
             } else {
                 var podname = get_target_pod_name(process.env.HOSTNAME, config.headless.name);
                 var address = [config.address || config.name, podname].join('.');
                 var targetPort = config.headless.targetPort || config.port;
                 var host = [podname, config.name || config.address, process.env.NAMESPACE, 'svc.cluster.local'].join('.');
                 this.egress = bridging.egress(address, host, targetPort);
+                this.egress.metrics = metrics.create_bridge_metrics(address, config.protocol, process.env.SKUPPER_SITE_ID);
             }
         }
     } else {
