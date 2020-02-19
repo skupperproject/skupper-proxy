@@ -9,6 +9,7 @@
     },
     "dependencies": {
         "debug": "*",
+        "http2": "^3.3.7",
         "rhea": "*"
     }
 }
