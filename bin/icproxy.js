@@ -108,7 +108,7 @@ function Proxy(config) {
     if (bridging) {
         if (config.headless === undefined) {
             var address = config.address || config.name;
-            this.ingress = bridging.ingress(config.port, address);
+            this.ingress = bridging.ingress(Math.max(config.port, 1024), address);
 
             if (config.targets) {
                 this.egress = config.targets.map(function (target) {

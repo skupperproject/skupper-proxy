@@ -406,7 +406,8 @@ Deployer.prototype.recreate_service = function (name, desired_service) {
                     ports: [
                         {
                             name: name,
-                            port: desired_service.port
+                            port: desired_service.port,
+                            targetPort: Math.max(desired_service.port, 1024)
                         }
                     ],
                     selector: get_proxy_selector(name)
@@ -449,7 +450,8 @@ Deployer.prototype.create_service = function (name, desired_service) {
             ports: [
                 {
                     name: name,
-                    port: desired_service.port
+                    port: desired_service.port,
+                    targetPort: Math.max(desired_service.port, 1024)
                 }
             ],
             selector: get_proxy_selector(name)
@@ -497,6 +499,7 @@ Deployer.prototype.update_service = function (name, desired_service) {
             original.spec.selector = desired_selector;
         }
         original.spec.ports[0].port = desired_service.port;
+        original.spec.ports[0].targetPort = Math.max(desired_service.port, 1024);
         return original;
     }).then(function (result) {
         var code = result.code;
